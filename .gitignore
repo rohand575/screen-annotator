@@ -1,0 +1,64 @@
+# Dependencies
+node_modules/
+
+# Rust/Tauri build artifacts
+src-tauri/target/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.sublime-project
+*.sublime-workspace
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build outputs
+dist/
+build/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Lock files (optional - uncomment if you don't want to track them)
+# package-lock.json
+# Cargo.lock
+
+# Tauri specific
+src-tauri/WixTools/
+src-tauri/*.pdb
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*~
+
+# Coverage and test artifacts
+coverage/
+.nyc_output/
+
+# Debug files
+*.dSYM/
+
+# Claude Code temp files
+tmpclaude-*
+.claude/
+
+# Misc
+nul

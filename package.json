@@ -1,0 +1,17 @@
+{
+  "name": "screen-annotator",
+  "version": "1.0.0",
+  "description": "Lightweight cross-platform screen annotation overlay",
+  "private": true,
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.5.0"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.5.0"
+  }
+}

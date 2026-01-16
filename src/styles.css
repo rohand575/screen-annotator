@@ -1,0 +1,108 @@
+/* Reset and base transparent styling */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html, body {
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+    background: transparent;
+    /* Prevent text selection while drawing */
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+/* Main drawing canvas - covers entire screen */
+#canvas {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    cursor: crosshair;
+    /* Canvas background must be transparent */
+    background: transparent;
+}
+
+/* Tool indicator - shows current mode in corner */
+#tool-indicator {
+    position: fixed;
+    bottom: 20px;
+    left: 20px;
+    background: rgba(0, 0, 0, 0.8);
+    color: #fff;
+    padding: 12px 20px;
+    border-radius: 8px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    z-index: 10000;
+    pointer-events: none;
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+#tool-name {
+    font-weight: 700;
+    font-size: 16px;
+    letter-spacing: 1px;
+}
+
+#tool-hint {
+    font-size: 11px;
+    opacity: 0.7;
+    letter-spacing: 0.5px;
+}
+
+/* Text input container */
+#text-container {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    pointer-events: none;
+    z-index: 9999;
+}
+
+/* Floating text boxes created on click in text mode */
+.floating-text {
+    position: absolute;
+    background: rgba(255, 255, 0, 0.9);
+    border: 2px solid #ff6600;
+    border-radius: 4px;
+    padding: 8px 12px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 18px;
+    font-weight: 600;
+    color: #000;
+    min-width: 100px;
+    outline: none;
+    pointer-events: auto;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    z-index: 10001;
+}
+
+.floating-text:focus {
+    border-color: #ff0000;
+    box-shadow: 0 4px 16px rgba(255, 0, 0, 0.4);
+}
+
+.floating-text::placeholder {
+    color: rgba(0, 0, 0, 0.4);
+}
+
+/* Different cursor for text mode */
+body.text-mode #canvas {
+    cursor: text;
+}
+
+/* Arrow cursor for default */
+body.arrow-mode #canvas {
+    cursor: crosshair;
+}
