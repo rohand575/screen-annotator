@@ -30,6 +30,7 @@
         "dragDropEnabled": false
       }
     ],
+    "macOSPrivateApi": true,
     "security": {
       "csp": null
     }
@@ -48,6 +49,16 @@
       "webviewInstallMode": {
         "type": "embedBootstrapper",
         "silent": true
+      }
+    },
+    "linux": {
+      "deb": {
+        "depends": [],
+        "section": "utility",
+        "priority": "optional"
+      },
+      "appimage": {
+        "bundleMediaFramework": false
       }
     }
   },
