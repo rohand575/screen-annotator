@@ -7,13 +7,15 @@ A lightweight, cross-platform desktop app for drawing temporary visual annotatio
 
 ## Features
 
-- **Global Shortcut**: `Ctrl+Shift+D` toggles overlay from anywhere
+- **Global Shortcut**: `Ctrl+Shift+A` to start/stop the annotator
 - **Three Drawing Tools**:
   - `R` - Rectangle mode (draw boxes to highlight areas)
   - `A` - Arrow mode (draw arrows to point at things)
   - `T` - Text mode (click to create floating text labels)
-- **Escape** - Clears all annotations and hides overlay
-- **Minimal footprint** - Runs silently in system tray
+- **Pause/Resume**: Press `ESC` to pause (annotations stay visible, use desktop normally), press `ESC` again to resume drawing
+- **Multi-monitor support**: Opens overlay on all connected screens
+- **Auto-start**: Automatically starts with Windows and runs in background
+- **Minimal footprint** - Runs silently in system tray, launches after installation
 - **Cross-platform** - Works on Windows and macOS
 
 ## Prerequisites
@@ -91,17 +93,26 @@ After launching, the app runs silently in the system tray (notification area on 
 
 | Action | Key/Input |
 |--------|-----------|
-| Toggle overlay | `Ctrl+Shift+D` (global) |
+| **Start annotator** | `Ctrl+Shift+A` (global hotkey) |
+| **Pause** (keep annotations, use desktop) | `ESC` |
+| **Resume** drawing | `ESC` (when paused) |
+| **Close & clear** | `Ctrl+Shift+A` (when active/paused) |
 | Rectangle mode | `R` |
 | Arrow mode | `A` |
 | Text mode | `T` |
-| Clear & hide | `Escape` |
-| Clear (stay visible) | `C` |
-| Draw rectangle | Click + drag |
-| Draw arrow | Click + drag |
+| Clear annotations (stay active) | `C` |
+| Draw rectangle/arrow | Click + drag |
 | Create text | Click (in text mode) |
 | Finish text | `Enter` or click elsewhere |
 | Quit app | Right-click tray icon |
+
+### Workflow
+
+1. Press `Ctrl+Shift+A` to start the annotator
+2. Draw annotations using R (rectangle), A (arrow), or T (text)
+3. Press `ESC` to pause — annotations stay visible while you interact with your desktop
+4. Press `ESC` again to resume drawing
+5. Press `Ctrl+Shift+A` to close completely (clears all annotations)
 
 ### System Tray
 
@@ -128,7 +139,7 @@ screen-annotator/
 ## Troubleshooting
 
 ### "Global shortcut not working"
-- Another app might be using `Ctrl+Shift+D`
+- Another app might be using `Ctrl+Shift+A`
 - On macOS, check System Preferences > Security & Privacy > Accessibility
 
 ### "Overlay not appearing"
@@ -136,7 +147,7 @@ screen-annotator/
 - Try left-clicking the tray icon to toggle manually
 
 ### "Drawings not visible"
-- Ensure you're in the correct tool mode (check bottom-left indicator)
+- Ensure you're in the correct tool mode (R for rectangle, A for arrow, T for text)
 - Click and drag - single clicks only work in text mode
 
 ### Build errors on Windows

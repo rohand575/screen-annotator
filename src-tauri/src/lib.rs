@@ -4,6 +4,7 @@
     windows_subsystem = "windows"
 )]
 
+use std::sync::Mutex;
 use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager, WebviewWindowBuilder, AppHandle,
@@ -11,115 +12,260 @@ use tauri::{
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
-/// Get the target monitor(s) for the overlay based on display mode:
-/// - Duplicate mode (1 monitor detected): Use primary/current monitor
-/// - Extend mode (multiple monitors): Use secondary (non-primary) monitors
-fn get_target_monitors(app: &AppHandle) -> Vec<(i32, i32, u32, u32)> {
-    let monitors: Vec<_> = app.available_monitors().unwrap_or_default();
-    let primary = app.primary_monitor().ok().flatten();
+// ============================================================================
+// APP STATE MACHINE
+// ============================================================================
+// Hidden  --hotkey-->  Active  --ESC-->  Paused  --hotkey-->  Active
+//                      Active  --hotkey-->  Hidden
+// Paused  --hotkey-->  Active (resume drawing with existing annotations)
+// Active  --hotkey-->  Hidden (clear everything)
 
-    if monitors.len() <= 1 {
-        // Duplicate mode or single monitor - use the primary/only monitor
-        if let Some(monitor) = monitors.first().or(primary.as_ref()) {
+#[derive(Debug, Clone, PartialEq)]
+enum AppState {
+    Hidden,
+    Active,
+    Paused,
+}
+
+struct AppStateManager {
+    state: AppState,
+}
+
+impl AppStateManager {
+    fn new() -> Self {
+        Self {
+            state: AppState::Hidden,
+        }
+    }
+}
+
+/// Monitor info with physical position, size, and scale factor
+struct MonitorInfo {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    scale_factor: f64,
+}
+
+/// Get ALL monitors for overlay display (covers every screen)
+fn get_all_monitors(app: &AppHandle) -> Vec<MonitorInfo> {
+    let monitors: Vec<_> = app.available_monitors().unwrap_or_default();
+
+    if monitors.is_empty() {
+        // Fallback to primary monitor
+        if let Some(monitor) = app.primary_monitor().ok().flatten() {
             let pos = monitor.position();
             let size = monitor.size();
-            return vec![(pos.x, pos.y, size.width, size.height)];
+            return vec![MonitorInfo {
+                x: pos.x,
+                y: pos.y,
+                width: size.width,
+                height: size.height,
+                scale_factor: monitor.scale_factor(),
+            }];
         }
         return vec![];
     }
 
-    // Extend mode - use secondary monitors (non-primary)
-    let primary_pos = primary.as_ref().map(|m| m.position());
-
+    // Return ALL monitors with their scale factors
     monitors
         .iter()
-        .filter(|m| {
-            // Filter out the primary monitor
-            if let Some(primary_p) = primary_pos {
-                let pos = m.position();
-                !(pos.x == primary_p.x && pos.y == primary_p.y)
-            } else {
-                true
-            }
-        })
         .map(|m| {
             let pos = m.position();
             let size = m.size();
-            (pos.x, pos.y, size.width, size.height)
+            MonitorInfo {
+                x: pos.x,
+                y: pos.y,
+                width: size.width,
+                height: size.height,
+                scale_factor: m.scale_factor(),
+            }
         })
         .collect()
 }
 
-/// Toggle the overlay window visibility
-fn toggle_overlay(app: &AppHandle) {
-    let main_window = app.get_webview_window("overlay");
+/// Handle hotkey press with state machine logic
+/// Hotkey: Hidden -> Active (start) | Active -> Hidden (close) | Paused -> Hidden (close)
+fn handle_hotkey(app: &AppHandle) {
+    let state_manager = app.state::<Mutex<AppStateManager>>();
+    let mut manager = state_manager.lock().unwrap();
 
-    // Check if overlay is currently visible
-    let is_visible = main_window
-        .as_ref()
-        .map(|w| w.is_visible().unwrap_or(false))
-        .unwrap_or(false);
-
-    if is_visible {
-        // Hide all overlay windows
-        hide_all_overlays(app);
-    } else {
-        // Show overlays on target monitors
-        show_overlays(app);
+    match manager.state {
+        AppState::Hidden => {
+            // Hidden -> Active: Show overlay and start drawing
+            manager.state = AppState::Active;
+            drop(manager);
+            show_overlays(app, false);
+        }
+        AppState::Active | AppState::Paused => {
+            // Active/Paused -> Hidden: Clear everything and hide
+            manager.state = AppState::Hidden;
+            drop(manager);
+            hide_all_overlays(app, true);
+        }
     }
 }
 
+/// Handle ESC press from frontend
+/// ESC: Active -> Paused (pause) | Paused -> Active (resume)
+fn toggle_pause(app: &AppHandle) {
+    let state_manager = app.state::<Mutex<AppStateManager>>();
+    let mut manager = state_manager.lock().unwrap();
+
+    match manager.state {
+        AppState::Active => {
+            // Active -> Paused: Keep annotations visible but disable interaction
+            manager.state = AppState::Paused;
+            drop(manager);
+            set_overlays_passthrough(app, true);
+            emit_to_all_overlays(app, "overlay-paused");
+        }
+        AppState::Paused => {
+            // Paused -> Active: Resume drawing
+            manager.state = AppState::Active;
+            drop(manager);
+            resume_overlays(app);
+        }
+        AppState::Hidden => {
+            // Do nothing if hidden
+        }
+    }
+}
+
+/// Emit an event to all overlay windows
+fn emit_to_all_overlays(app: &AppHandle, event: &str) {
+    if let Some(window) = app.get_webview_window("overlay") {
+        let _ = window.emit(event, ());
+    }
+    for i in 1..10 {
+        let label = format!("overlay-{}", i);
+        if let Some(window) = app.get_webview_window(&label) {
+            let _ = window.emit(event, ());
+        }
+    }
+}
+
+/// Set all overlay windows to ignore cursor events (passthrough) or not
+fn set_overlays_passthrough(app: &AppHandle, ignore: bool) {
+    if let Some(window) = app.get_webview_window("overlay") {
+        let _ = window.set_ignore_cursor_events(ignore);
+    }
+    for i in 1..10 {
+        let label = format!("overlay-{}", i);
+        if let Some(window) = app.get_webview_window(&label) {
+            let _ = window.set_ignore_cursor_events(ignore);
+        }
+    }
+}
+
+/// Resume overlays from paused state (re-enable interaction)
+fn resume_overlays(app: &AppHandle) {
+    // Re-enable cursor events
+    set_overlays_passthrough(app, false);
+
+    // Focus the main overlay
+    if let Some(window) = app.get_webview_window("overlay") {
+        let _ = window.set_focus();
+    }
+
+    // Emit resumed event to frontend
+    emit_to_all_overlays(app, "overlay-resumed");
+}
+
 /// Hide all overlay windows
-fn hide_all_overlays(app: &AppHandle) {
+fn hide_all_overlays(app: &AppHandle, clear: bool) {
+    // First, emit clear event and execute JS to clear canvas immediately
+    if clear {
+        // Execute JS directly to clear canvas before hiding
+        if let Some(window) = app.get_webview_window("overlay") {
+            let _ = window.eval("if(typeof forceCompleteReset === 'function') forceCompleteReset();");
+        }
+        for i in 1..10 {
+            let label = format!("overlay-{}", i);
+            if let Some(window) = app.get_webview_window(&label) {
+                let _ = window.eval("if(typeof forceCompleteReset === 'function') forceCompleteReset();");
+            }
+        }
+        // Also emit the event
+        emit_to_all_overlays(app, "overlay-hidden");
+    }
+
+    // Small delay to ensure JS executes before hiding
+    std::thread::sleep(std::time::Duration::from_millis(10));
+
     // Hide main overlay
     if let Some(window) = app.get_webview_window("overlay") {
+        let _ = window.set_ignore_cursor_events(false);
         let _ = window.hide();
-        let _ = window.emit("overlay-hidden", ());
     }
 
     // Hide any secondary overlay windows
     for i in 1..10 {
         let label = format!("overlay-{}", i);
         if let Some(window) = app.get_webview_window(&label) {
+            let _ = window.set_ignore_cursor_events(false);
             let _ = window.hide();
-            // Close secondary windows when hiding
             let _ = window.close();
         }
     }
 }
 
-/// Show overlays on target monitors
-fn show_overlays(app: &AppHandle) {
-    let targets = get_target_monitors(app);
+/// Show overlays on all monitors
+fn show_overlays(app: &AppHandle, is_resume: bool) {
+    let targets = get_all_monitors(app);
 
     if targets.is_empty() {
         return;
     }
 
     // First target uses the main overlay window
-    if let Some((x, y, width, height)) = targets.first() {
+    if let Some(monitor) = targets.first() {
         if let Some(window) = app.get_webview_window("overlay") {
             let _ = window.set_position(tauri::Position::Physical(
-                tauri::PhysicalPosition::new(*x, *y),
+                tauri::PhysicalPosition::new(monitor.x, monitor.y),
             ));
             let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize::new(
-                *width,
-                *height,
+                monitor.width,
+                monitor.height,
             )));
+            let _ = window.set_ignore_cursor_events(false);
             let _ = window.show();
             let _ = window.set_focus();
-            let _ = window.emit("overlay-shown", ());
+            if !is_resume {
+                let _ = window.emit("overlay-shown", ());
+            }
         }
     }
 
-    // Additional targets get new windows (for future multi-secondary-monitor support)
-    for (i, (x, y, width, height)) in targets.iter().skip(1).enumerate() {
+    // Additional targets get new windows for multi-monitor support
+    for (i, monitor) in targets.iter().skip(1).enumerate() {
         let label = format!("overlay-{}", i + 1);
 
         // Check if window already exists
-        if app.get_webview_window(&label).is_some() {
+        if let Some(window) = app.get_webview_window(&label) {
+            // Update position and size in case monitor config changed
+            let _ = window.set_position(tauri::Position::Physical(
+                tauri::PhysicalPosition::new(monitor.x, monitor.y),
+            ));
+            let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize::new(
+                monitor.width,
+                monitor.height,
+            )));
+            let _ = window.set_ignore_cursor_events(false);
+            let _ = window.show();
+            if !is_resume {
+                let _ = window.emit("overlay-shown", ());
+            }
             continue;
         }
+
+        // Convert physical to logical coordinates for window builder
+        let scale = monitor.scale_factor;
+        let logical_x = monitor.x as f64 / scale;
+        let logical_y = monitor.y as f64 / scale;
+        let logical_width = monitor.width as f64 / scale;
+        let logical_height = monitor.height as f64 / scale;
 
         // Create a new overlay window for this monitor
         if let Ok(window) = WebviewWindowBuilder::new(
@@ -128,8 +274,8 @@ fn show_overlays(app: &AppHandle) {
             tauri::WebviewUrl::App("index.html".into()),
         )
         .title("Screen Annotator")
-        .position(*x as f64, *y as f64)
-        .inner_size(*width as f64, *height as f64)
+        .position(logical_x, logical_y)
+        .inner_size(logical_width, logical_height)
         .resizable(false)
         .fullscreen(false)
         .transparent(true)
@@ -141,16 +287,35 @@ fn show_overlays(app: &AppHandle) {
         .drag_and_drop(false)
         .build()
         {
+            // After creation, set exact physical position/size to ensure accuracy
+            let _ = window.set_position(tauri::Position::Physical(
+                tauri::PhysicalPosition::new(monitor.x, monitor.y),
+            ));
+            let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize::new(
+                monitor.width,
+                monitor.height,
+            )));
             let _ = window.set_focus();
             let _ = window.emit("overlay-shown", ());
         }
     }
 }
 
-/// Hide the overlay window (called from frontend on Escape)
+/// Toggle pause state (called from frontend on Escape)
+/// Active -> Paused, Paused -> Active
+#[tauri::command]
+fn toggle_pause_cmd(app: AppHandle) {
+    toggle_pause(&app);
+}
+
+/// Hide the overlay window and clear everything
 #[tauri::command]
 fn hide_overlay(app: AppHandle) {
-    hide_all_overlays(&app);
+    let state_manager = app.state::<Mutex<AppStateManager>>();
+    let mut manager = state_manager.lock().unwrap();
+    manager.state = AppState::Hidden;
+    drop(manager);
+    hide_all_overlays(&app, true);
 }
 
 /// Get whether overlay is currently visible
@@ -159,6 +324,18 @@ fn is_overlay_visible(app: AppHandle) -> bool {
     app.get_webview_window("overlay")
         .map(|w| w.is_visible().unwrap_or(false))
         .unwrap_or(false)
+}
+
+/// Get current app state as string
+#[tauri::command]
+fn get_app_state(app: AppHandle) -> String {
+    let state_manager = app.state::<Mutex<AppStateManager>>();
+    let manager = state_manager.lock().unwrap();
+    match manager.state {
+        AppState::Hidden => "hidden".to_string(),
+        AppState::Active => "active".to_string(),
+        AppState::Paused => "paused".to_string(),
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -170,7 +347,13 @@ pub fn run() {
             MacosLauncher::LaunchAgent,
             Some(vec!["--minimized"]),
         ))
-        .invoke_handler(tauri::generate_handler![hide_overlay, is_overlay_visible])
+        .manage(Mutex::new(AppStateManager::new()))
+        .invoke_handler(tauri::generate_handler![
+            hide_overlay,
+            is_overlay_visible,
+            toggle_pause_cmd,
+            get_app_state
+        ])
         .setup(|app| {
             // Get the overlay window and hide it initially
             if let Some(window) = app.get_webview_window("overlay") {
@@ -189,7 +372,7 @@ pub fn run() {
                     } = event
                     {
                         let app = tray.app_handle();
-                        toggle_overlay(app);
+                        handle_hotkey(app);
                     }
                     if let TrayIconEvent::Click {
                         button: MouseButton::Right,
@@ -209,7 +392,7 @@ pub fn run() {
 
             app.global_shortcut().on_shortcut(shortcut, move |_app, _shortcut, event| {
                 if event.state == ShortcutState::Pressed {
-                    toggle_overlay(&app_handle);
+                    handle_hotkey(&app_handle);
                 }
             })?;
 
@@ -218,14 +401,13 @@ pub fn run() {
                 eprintln!("Warning: Could not register global shortcut Ctrl+Shift+A: {}. You can still use the tray icon.", e);
             }
 
-            // Enable autostart on Windows boot
+            // Always enable autostart on Windows boot
+            // This ensures the app always runs in background after system startup
             let autostart_manager = app.autolaunch();
-            if !autostart_manager.is_enabled().unwrap_or(false) {
-                if let Err(e) = autostart_manager.enable() {
-                    eprintln!("Warning: Could not enable autostart: {}", e);
-                } else {
-                    println!("Autostart enabled - app will run on Windows boot");
-                }
+            // Force enable autostart (re-enable even if already enabled to ensure registry is correct)
+            match autostart_manager.enable() {
+                Ok(_) => println!("Autostart enabled - app will run on Windows boot"),
+                Err(e) => eprintln!("Warning: Could not enable autostart: {}", e),
             }
 
             Ok(())

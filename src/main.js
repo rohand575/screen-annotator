@@ -49,29 +49,43 @@ const state = {
 // ============================================================================
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
-const toolNameEl = document.getElementById('tool-name');
 const textContainer = document.getElementById('text-container');
 
 /**
  * Resize canvas to fill screen with proper DPI scaling
  */
 function resizeCanvas() {
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = window.innerWidth * dpr;
-    canvas.height = window.innerHeight * dpr;
-    canvas.style.width = window.innerWidth + 'px';
-    canvas.style.height = window.innerHeight + 'px';
-    ctx.scale(dpr, dpr);
-    
+    resetCanvas();
     // Redraw all shapes after resize
     redrawAllShapes();
 }
 
 /**
- * Clear the canvas (transparent)
+ * Clear the canvas (transparent) - forces complete reset
  */
 function clearCanvas() {
+    // Reset transform first
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    // Clear with raw canvas dimensions
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    // Re-apply DPR scaling
+    const dpr = window.devicePixelRatio || 1;
+    ctx.scale(dpr, dpr);
+}
+
+/**
+ * Force complete canvas reset by reassigning dimensions
+ * This is the nuclear option that guarantees clearing
+ */
+function resetCanvas() {
+    const dpr = window.devicePixelRatio || 1;
+    // Reassigning width clears ALL canvas content and resets context
+    canvas.width = window.innerWidth * dpr;
+    canvas.height = window.innerHeight * dpr;
+    canvas.style.width = window.innerWidth + 'px';
+    canvas.style.height = window.innerHeight + 'px';
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.scale(dpr, dpr);
 }
 
 /**
@@ -237,21 +251,30 @@ function createTextBox(x, y) {
 function setTool(tool) {
     state.currentTool = tool;
     
-    // Update tool indicator
-    const toolNames = {
-        'rectangle': 'RECTANGLE',
-        'arrow': 'ARROW',
-        'text': 'TEXT'
-    };
-    toolNameEl.textContent = toolNames[tool] || tool.toUpperCase();
-    
     // Update body class for cursor
     document.body.className = tool + '-mode';
+    
+    console.log('Tool set to:', tool);
 }
 
 // ============================================================================
 // CLEAR ALL ANNOTATIONS
 // ============================================================================
+
+/**
+ * Toggle pause state - ESC toggles between Active and Paused.
+ * Active -> Paused: annotations stay visible, window becomes click-through
+ * Paused -> Active: resume drawing
+ */
+async function togglePause() {
+    // Blur any active text input
+    if (document.activeElement && document.activeElement.classList.contains('floating-text')) {
+        document.activeElement.blur();
+    }
+    
+    // Tell backend to toggle pause state
+    await invoke('toggle_pause_cmd');
+}
 
 /**
  * Clear everything and hide overlay
@@ -367,7 +390,10 @@ document.addEventListener('keydown', (e) => {
             setTool('text');
             break;
         case 'escape':
-            clearAndHide();
+            // ESC toggles pause: Active <-> Paused
+            // When paused, annotations stay visible but user can interact with desktop
+            // Press ESC again to resume drawing, press Hotkey to close completely
+            togglePause();
             break;
         case 'c':
             // C to clear but stay in overlay mode
@@ -386,17 +412,107 @@ window.addEventListener('resize', resizeCanvas);
 
 // --- Tauri Events ---
 
+// Track if we need a fresh start (set when hidden, cleared when shown)
+let needsFreshStart = true;
+
+/**
+ * Completely reset all state for fresh start
+ * Exposed globally so Rust can call it via eval()
+ */
+window.forceCompleteReset = function() {
+    console.log('Forcing complete reset of all state');
+    
+    // Clear state arrays
+    state.shapes = [];
+    state.isDrawing = false;
+    
+    // Remove all text elements from DOM
+    state.textElements.forEach(el => {
+        if (el.parentNode) el.parentNode.removeChild(el);
+    });
+    state.textElements = [];
+    
+    // Also clear any orphaned text elements
+    const textContainer = document.getElementById('text-container');
+    if (textContainer) {
+        while (textContainer.firstChild) {
+            textContainer.removeChild(textContainer.firstChild);
+        }
+    }
+    
+    // Force canvas reset (reassigns dimensions which clears everything)
+    resetCanvas();
+    
+    // Reset tool
+    setTool('rectangle');
+    
+    needsFreshStart = false;
+}
+
+// Local reference for easier calling
+const forceCompleteReset = window.forceCompleteReset;
+
 // Listen for overlay shown event to reset state
 listen('overlay-shown', () => {
-    // Reset to rectangle mode when overlay opens
-    setTool('rectangle');
-    resizeCanvas();
+    console.log('overlay-shown event received');
+    // Always do a complete reset when overlay is shown fresh
+    forceCompleteReset();
+    
+    // Double-check with delayed reset to handle any rendering race conditions
+    setTimeout(() => {
+        if (state.shapes.length === 0) {
+            // State is already clear, just make sure canvas is clear too
+            resetCanvas();
+        }
+    }, 50);
+    
+    // Triple-check with requestAnimationFrame
+    requestAnimationFrame(() => {
+        if (state.shapes.length === 0) {
+            resetCanvas();
+        }
+    });
 });
 
 // Listen for overlay hidden event
 listen('overlay-hidden', () => {
+    console.log('overlay-hidden event received');
+    // Mark that we need a fresh start next time
+    needsFreshStart = true;
     // Clear everything when hidden
     clearAll();
+});
+
+// Backup: Also reset on window focus if we need a fresh start
+// This catches cases where the Tauri event might not fire properly
+window.addEventListener('focus', () => {
+    if (needsFreshStart) {
+        console.log('Window focused with needsFreshStart=true, forcing reset');
+        forceCompleteReset();
+    }
+});
+
+// Backup: Also reset on visibility change
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && needsFreshStart) {
+        console.log('Visibility changed to visible with needsFreshStart=true, forcing reset');
+        forceCompleteReset();
+    }
+});
+
+// Listen for overlay paused event - annotations stay, drawing disabled
+listen('overlay-paused', () => {
+    console.log('Overlay paused - annotations visible, interaction disabled');
+    // Cancel any in-progress drawing
+    state.isDrawing = false;
+});
+
+// Listen for overlay resumed event - re-enable drawing
+listen('overlay-resumed', () => {
+    console.log('Overlay resumed - drawing re-enabled');
+    // Restore current tool
+    setTool(state.currentTool);
+    resizeCanvas();
 });
 
 // ============================================================================
@@ -404,14 +520,11 @@ listen('overlay-hidden', () => {
 // ============================================================================
 
 function init() {
-    // Initial canvas setup
-    resizeCanvas();
-    
-    // Set default tool
-    setTool('rectangle');
+    // Force complete reset on init to ensure clean state
+    forceCompleteReset();
     
     console.log('Screen Annotator initialized');
-    console.log('Shortcuts: R=Rectangle, A=Arrow, T=Text, ESC=Clear & Hide, C=Clear');
+    console.log('Shortcuts: R=Rectangle, A=Arrow, T=Text, ESC=Pause/Resume, C=Clear');
 }
 
 // Start when DOM is ready

@@ -11,7 +11,7 @@
     "trayIcon": {
       "iconPath": "icons/icon.png",
       "iconAsTemplate": true,
-      "tooltip": "Screen Annotator - Ctrl+Shift+D to toggle"
+      "tooltip": "Screen Annotator - Ctrl+Shift+A to toggle"
     },
     "windows": [
       {
@@ -49,6 +49,10 @@
       "webviewInstallMode": {
         "type": "embedBootstrapper",
         "silent": true
+      },
+      "nsis": {
+        "installerIcon": "icons/icon.ico",
+        "installerHooks": "nsis-hooks.nsi"
       }
     },
     "linux": {
