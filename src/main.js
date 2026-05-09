@@ -16,12 +16,14 @@ const CONFIG = {
     colors: {
         rectangle: '#ff3366',      // Vibrant red-pink for rectangles
         arrow: '#00ccff',          // Cyan for arrows
-        text: '#ffcc00',           // Yellow for text background
+        text: '#ffffff',           // White for text background
+        draw: '#00ff88',           // Bright green for freehand drawing
     },
     stroke: {
         rectangleWidth: 4,
         arrowWidth: 4,
         arrowHeadSize: 20,
+        drawWidth: 3,
     }
 };
 
@@ -29,19 +31,22 @@ const CONFIG = {
 // STATE MANAGEMENT
 // ============================================================================
 const state = {
-    // Current tool: 'rectangle' | 'arrow' | 'text'
+    // Current tool: 'rectangle' | 'arrow' | 'text' | 'draw'
     currentTool: 'rectangle',
-    
+
     // Drawing state
     isDrawing: false,
     startX: 0,
     startY: 0,
-    
+
     // Store all drawn shapes for redraw
     shapes: [],
-    
+
     // Store text elements separately (DOM elements)
     textElements: [],
+
+    // In-progress freehand draw path (array of {x, y} points)
+    currentDrawPath: [],
 };
 
 // ============================================================================
@@ -98,6 +103,8 @@ function redrawAllShapes() {
             drawRectangle(shape.x1, shape.y1, shape.x2, shape.y2, false);
         } else if (shape.type === 'arrow') {
             drawArrow(shape.x1, shape.y1, shape.x2, shape.y2, false);
+        } else if (shape.type === 'draw') {
+            drawFreePath(shape.points, false);
         }
     });
 }
@@ -187,6 +194,35 @@ function drawArrow(x1, y1, x2, y2, isPreview = true) {
 }
 
 /**
+ * Draw a freehand path through an array of {x, y} points
+ */
+function drawFreePath(points, isPreview = true) {
+    if (points.length < 2) return;
+
+    ctx.strokeStyle = CONFIG.colors.draw;
+    ctx.lineWidth = CONFIG.stroke.drawWidth;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.4)';
+    ctx.shadowBlur = 3;
+    ctx.shadowOffsetX = 1;
+    ctx.shadowOffsetY = 1;
+
+    ctx.beginPath();
+    ctx.moveTo(points[0].x, points[0].y);
+    for (let i = 1; i < points.length; i++) {
+        ctx.lineTo(points[i].x, points[i].y);
+    }
+    ctx.stroke();
+
+    ctx.shadowColor = 'transparent';
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 0;
+}
+
+/**
  * Create a floating text box at position
  */
 function createTextBox(x, y) {
@@ -196,7 +232,30 @@ function createTextBox(x, y) {
     input.className = 'floating-text';
     input.style.left = x + 'px';
     input.style.top = y + 'px';
-    input.placeholder = 'Type here...';
+    input.style.width = '30px';
+
+    // Hidden mirror span used to measure text width for auto-resize
+    const mirror = document.createElement('span');
+    mirror.style.cssText = [
+        'position:absolute',
+        'visibility:hidden',
+        'white-space:pre',
+        'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif',
+        'font-size:18px',
+        'font-weight:600',
+        'padding:8px 12px',
+        'left:-9999px',
+        'top:-9999px',
+    ].join(';');
+    document.body.appendChild(mirror);
+
+    function resizeInput() {
+        mirror.textContent = input.value;
+        const w = Math.max(30, mirror.offsetWidth + 6);
+        input.style.width = w + 'px';
+    }
+
+    input.addEventListener('input', resizeInput);
 
     console.log('Input element created:', input);
 
@@ -223,6 +282,7 @@ function createTextBox(x, y) {
         // Don't let Escape propagate if we're editing
         if (e.key === 'Escape' && input.value.trim() === '') {
             // If empty on escape, remove the text box
+            mirror.remove();
             input.remove();
             const idx = state.textElements.indexOf(input);
             if (idx > -1) state.textElements.splice(idx, 1);
@@ -233,6 +293,7 @@ function createTextBox(x, y) {
 
     // Remove empty text boxes on blur
     input.addEventListener('blur', () => {
+        mirror.remove();
         if (input.value.trim() === '') {
             input.remove();
             const idx = state.textElements.indexOf(input);
@@ -250,11 +311,13 @@ function createTextBox(x, y) {
  */
 function setTool(tool) {
     state.currentTool = tool;
-    
-    // Update body class for cursor
     document.body.className = tool + '-mode';
-    
-    console.log('Tool set to:', tool);
+    invoke('broadcast_tool', { tool });
+}
+
+function applyTool(tool) {
+    state.currentTool = tool;
+    document.body.className = tool + '-mode';
 }
 
 // ============================================================================
@@ -311,9 +374,14 @@ function clearAll() {
 canvas.addEventListener('mousedown', (e) => {
     console.log('Mouse down - current tool:', state.currentTool);
     if (state.currentTool === 'text') {
-        // In text mode, click creates a text box
         console.log('Creating text box at', e.clientX, e.clientY);
         createTextBox(e.clientX, e.clientY);
+        return;
+    }
+
+    if (state.currentTool === 'draw') {
+        state.isDrawing = true;
+        state.currentDrawPath = [{ x: e.clientX, y: e.clientY }];
         return;
     }
 
@@ -325,10 +393,17 @@ canvas.addEventListener('mousedown', (e) => {
 
 canvas.addEventListener('mousemove', (e) => {
     if (!state.isDrawing) return;
-    
+
+    if (state.currentTool === 'draw') {
+        state.currentDrawPath.push({ x: e.clientX, y: e.clientY });
+        redrawAllShapes();
+        drawFreePath(state.currentDrawPath, true);
+        return;
+    }
+
     // Redraw all existing shapes
     redrawAllShapes();
-    
+
     // Draw preview of current shape
     if (state.currentTool === 'rectangle') {
         drawRectangle(state.startX, state.startY, e.clientX, e.clientY, true);
@@ -340,7 +415,16 @@ canvas.addEventListener('mousemove', (e) => {
 canvas.addEventListener('mouseup', (e) => {
     if (!state.isDrawing) return;
     state.isDrawing = false;
-    
+
+    if (state.currentTool === 'draw') {
+        if (state.currentDrawPath.length > 1) {
+            state.shapes.push({ type: 'draw', points: state.currentDrawPath });
+        }
+        state.currentDrawPath = [];
+        redrawAllShapes();
+        return;
+    }
+
     // Save the shape
     const shape = {
         type: state.currentTool,
@@ -349,13 +433,13 @@ canvas.addEventListener('mouseup', (e) => {
         x2: e.clientX,
         y2: e.clientY
     };
-    
+
     // Only save if shape has some size
     const minSize = 5;
     if (Math.abs(shape.x2 - shape.x1) > minSize || Math.abs(shape.y2 - shape.y1) > minSize) {
         state.shapes.push(shape);
     }
-    
+
     // Final redraw
     redrawAllShapes();
 });
@@ -364,6 +448,10 @@ canvas.addEventListener('mouseup', (e) => {
 canvas.addEventListener('mouseleave', () => {
     if (state.isDrawing) {
         state.isDrawing = false;
+        if (state.currentTool === 'draw' && state.currentDrawPath.length > 1) {
+            state.shapes.push({ type: 'draw', points: state.currentDrawPath });
+            state.currentDrawPath = [];
+        }
         redrawAllShapes();
     }
 });
@@ -378,16 +466,23 @@ document.addEventListener('keydown', (e) => {
 
     console.log('Key pressed:', e.key, 'Current tool:', state.currentTool);
 
+    const noModifiers = !e.ctrlKey && !e.altKey && !e.metaKey;
+
     switch (e.key.toLowerCase()) {
         case 'r':
-            setTool('rectangle');
+            if (noModifiers) setTool('rectangle');
             break;
         case 'a':
-            setTool('arrow');
+            if (noModifiers) setTool('arrow');
             break;
         case 't':
-            console.log('Setting tool to text');
-            setTool('text');
+            if (noModifiers) {
+                console.log('Setting tool to text');
+                setTool('text');
+            }
+            break;
+        case 'd':
+            if (noModifiers) setTool('draw');
             break;
         case 'escape':
             // ESC toggles pause: Active <-> Paused
@@ -396,12 +491,7 @@ document.addEventListener('keydown', (e) => {
             togglePause();
             break;
         case 'c':
-            // C to clear but stay in overlay mode
-            if (e.ctrlKey || e.metaKey) {
-                // Don't override system Ctrl+C
-                return;
-            }
-            clearAll();
+            if (noModifiers) clearAll();
             break;
     }
 });
@@ -425,6 +515,7 @@ window.forceCompleteReset = function() {
     // Clear state arrays
     state.shapes = [];
     state.isDrawing = false;
+    state.currentDrawPath = [];
     
     // Remove all text elements from DOM
     state.textElements.forEach(el => {
@@ -444,7 +535,7 @@ window.forceCompleteReset = function() {
     resetCanvas();
     
     // Reset tool
-    setTool('rectangle');
+    applyTool('rectangle');
     
     needsFreshStart = false;
 }
@@ -500,6 +591,11 @@ document.addEventListener('visibilitychange', () => {
     }
 });
 
+// Sync tool selection across all overlay windows
+listen('tool-changed', (event) => {
+    applyTool(event.payload);
+});
+
 // Listen for overlay paused event - annotations stay, drawing disabled
 listen('overlay-paused', () => {
     console.log('Overlay paused - annotations visible, interaction disabled');
@@ -524,7 +620,7 @@ function init() {
     forceCompleteReset();
     
     console.log('Screen Annotator initialized');
-    console.log('Shortcuts: R=Rectangle, A=Arrow, T=Text, ESC=Pause/Resume, C=Clear');
+    console.log('Shortcuts: R=Rectangle, A=Arrow, T=Text, D=Draw, ESC=Pause/Resume, C=Clear');
 }
 
 // Start when DOM is ready

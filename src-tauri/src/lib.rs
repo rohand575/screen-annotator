@@ -15,7 +15,7 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 // ============================================================================
 // APP STATE MACHINE
 // ============================================================================
-// Hidden  --hotkey-->  Active  --ESC-->  Paused  --hotkey-->  Active
+// Hidden  --Ctrl+Alt+A-->  Active  --ESC-->  Paused  --Ctrl+Alt+A-->  Active
 //                      Active  --hotkey-->  Hidden
 // Paused  --hotkey-->  Active (resume drawing with existing annotations)
 // Active  --hotkey-->  Hidden (clear everything)
@@ -326,6 +326,20 @@ fn is_overlay_visible(app: AppHandle) -> bool {
         .unwrap_or(false)
 }
 
+/// Broadcast tool selection to all overlay windows so every screen stays in sync
+#[tauri::command]
+fn broadcast_tool(app: AppHandle, tool: String) {
+    if let Some(window) = app.get_webview_window("overlay") {
+        let _ = window.emit("tool-changed", tool.clone());
+    }
+    for i in 1..10 {
+        let label = format!("overlay-{}", i);
+        if let Some(window) = app.get_webview_window(&label) {
+            let _ = window.emit("tool-changed", tool.clone());
+        }
+    }
+}
+
 /// Get current app state as string
 #[tauri::command]
 fn get_app_state(app: AppHandle) -> String {
@@ -352,7 +366,8 @@ pub fn run() {
             hide_overlay,
             is_overlay_visible,
             toggle_pause_cmd,
-            get_app_state
+            get_app_state,
+            broadcast_tool
         ])
         .setup(|app| {
             // Get the overlay window and hide it initially
@@ -362,7 +377,7 @@ pub fn run() {
 
             // Build system tray
             let _tray = TrayIconBuilder::new()
-                .tooltip("Screen Annotator\nCtrl+Shift+A to toggle\nRight-click to quit")
+                .tooltip("Screen Annotator\nCtrl+Alt+A to toggle\nRight-click to quit")
                 .icon(app.default_window_icon().unwrap().clone())
                 .on_tray_icon_event(|tray, event| {
                     if let TrayIconEvent::Click {
@@ -386,8 +401,8 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            // Register global shortcut: Ctrl+Shift+A
-            let shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyA);
+            // Register global shortcut: Ctrl+Alt+A
+            let shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyA);
             let app_handle = app.handle().clone();
 
             app.global_shortcut().on_shortcut(shortcut, move |_app, _shortcut, event| {
@@ -398,7 +413,7 @@ pub fn run() {
 
             // Try to register the shortcut, but don't fail if it's already registered
             if let Err(e) = app.global_shortcut().register(shortcut) {
-                eprintln!("Warning: Could not register global shortcut Ctrl+Shift+A: {}. You can still use the tray icon.", e);
+                eprintln!("Warning: Could not register global shortcut Ctrl+Alt+A: {}. You can still use the tray icon.", e);
             }
 
             // Always enable autostart on Windows boot

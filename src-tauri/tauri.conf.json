@@ -11,7 +11,7 @@
     "trayIcon": {
       "iconPath": "icons/icon.png",
       "iconAsTemplate": true,
-      "tooltip": "Screen Annotator - Ctrl+Shift+A to toggle"
+      "tooltip": "Screen Annotator - Ctrl+Alt+A to toggle"
     },
     "windows": [
       {
